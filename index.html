@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Voice Jump Runner</title>
+  <style>
+    body{margin:0;background:linear-gradient(#8fd3ff,#e9f9ff);font-family:sans-serif;display:grid;place-items:center;min-height:100vh}
+    .wrap{width:min(960px,96vw)} canvas{width:100%;background:linear-gradient(#8fd3ff,#dff4ff);border-radius:12px;display:block}
+    .ui{margin-top:8px;background:#ffffffd9;border-radius:10px;padding:10px;display:grid;gap:8px}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap} button{padding:8px 12px;border:0;border-radius:8px;background:#111;color:#fff;font-weight:700}
+    input[type=range]{width:200px}.meter{width:220px;height:12px;background:#e5e5e5;border-radius:999px;overflow:hidden}.fill{height:100%;width:0;background:linear-gradient(90deg,#06d6a0,#ffd166,#ef476f)}
+    .warn{color:#b00020;font-size:13px}
+  </style>
+</head>
+<body>
+<div class="wrap">
+<canvas id="cv" width="960" height="540"></canvas>
+<div class="ui">
+  <div class="row"><button id="mic">🎤 マイク有効化</button><button id="start">START</button><button id="retry">RETRY</button><b id="state">TITLE</b></div>
+  <div class="row"><label>小ジャンプ</label><input id="s" type="range" min="0.01" max="0.25" step="0.005" value="0.06"><span id="sv"></span><label>大ジャンプ</label><input id="b" type="range" min="0.03" max="0.4" step="0.005" value="0.13"><span id="bv"></span></div>
+  <div class="row"><label>音量</label><div class="meter"><div id="f" class="fill"></div></div><span id="mv">0.000</span></div>
+  <div class="warn" id="warn"></div>
+  <div>マイク不可時は Space / 画面タップで小ジャンプ、Shiftで大ジャンプ。</div>
+</div>
+</div>
+<script>
+(()=>{
+const cv=document.getElementById('cv'),ctx=cv.getContext('2d');const W=cv.width,H=cv.height,GY=430;
+const ui={mic:mic,start:start,retry:retry,state:state,s:s,b:b,sv:sv,bv:bv,f:f,mv:mv,warn:warn};
+const S={TITLE:0,RUN:1,OVER:2}; let gs=S.TITLE;
+let actx,an,data,mic=0,smooth=0,lastTrig=0; const cooldown=160;
+const p={x:180,y:GY,w:30,h:72,vy:0,ground:true,anim:0,mode:'run'};
+let speed=250,dist=0,score=0,best=0,t=0; let obs=[]; let spawn=0;
+function sync(){if(+ui.b.value<=+ui.s.value+0.005)ui.b.value=(+ui.s.value+0.005).toFixed(3);ui.sv.textContent=(+ui.s.value).toFixed(3);ui.bv.textContent=(+ui.b.value).toFixed(3)} sync();
+ui.s.oninput=ui.b.oninput=sync;
+async function initMic(){
+  if(!navigator.mediaDevices?.getUserMedia) throw new Error('このブラウザは getUserMedia 非対応');
+  const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+  actx=new (window.AudioContext||window.webkitAudioContext)(); an=actx.createAnalyser(); an.fftSize=1024; data=new Uint8Array(an.fftSize);
+  actx.createMediaStreamSource(stream).connect(an);
+}
+function updateMic(){if(!an)return; an.getByteTimeDomainData(data); let s=0; for(let i=0;i<data.length;i++){let v=(data[i]-128)/128;s+=v*v;} mic=Math.sqrt(s/data.length); smooth+=(mic-smooth)*0.28; ui.f.style.width=Math.min(100,smooth*500)+'%'; ui.mv.textContent=smooth.toFixed(3)}
+function reset(){gs=S.RUN;ui.state.textContent='RUN';p.y=GY;p.vy=0;p.ground=true;obs=[];spawn=0;speed=250;dist=0;score=0;t=0}
+function jump(big=false){if(!p.ground)return; p.vy=big?-980:-700;p.ground=false}
+function spawnObs(){const h=36+Math.random()*45,w=24+Math.random()*26;obs.push({x:W+40,y:GY-h,w,h})}
+function upd(dt){updateMic(); if(gs!==S.RUN)return; t+=dt;speed+=dt*2;dist+=speed*dt*0.1;score=Math.floor(dist);
+  const now=performance.now(); if(now-lastTrig>cooldown){if(smooth>+ui.b.value){jump(true);lastTrig=now;}else if(smooth>+ui.s.value){jump(false);lastTrig=now;}}
+  spawn-=dt; if(spawn<=0){spawnObs();spawn=0.9+Math.random()*0.7}
+  for(const o of obs) o.x-=speed*dt; obs=obs.filter(o=>o.x+o.w>-20);
+  p.vy=Math.min(1300,p.vy+2200*dt); p.y+=p.vy*dt; if(p.y>=GY){p.y=GY;p.vy=0;p.ground=true}
+  const px=p.x,py=p.y-p.h,pw=p.w,ph=p.h;
+  for(const o of obs){if(px<o.x+o.w&&px+pw>o.x&&py<o.y+o.h&&py+ph>o.y){if(p.vy>140&&py+ph-o.y<18){o.dead=true;p.vy=-460;}else{gs=S.OVER;ui.state.textContent='GAME OVER';best=Math.max(best,score)}}}
+  obs=obs.filter(o=>!o.dead);
+  p.mode=!p.ground?(p.vy<0?'jump':'fall'):(speed>300?'run':'walk'); p.anim+=dt*(p.mode==='run'?13:8);
+}
+function draw(){ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#9ad18b'; for(let i=0;i<6;i++){let x=((i*220)-((t*speed*0.25)%1320))-120;ctx.beginPath();ctx.ellipse(x+110,340,110,70,0,Math.PI,0,true);ctx.fill();}
+  ctx.fillStyle='#5c3d2e';ctx.fillRect(0,GY,W,H-GY);ctx.fillStyle='#2f9e44';for(let x=-(t*speed%24);x<W;x+=24)ctx.fillRect(x,GY-8,18,8);
+  for(const o of obs){ctx.fillStyle='#6d6875';ctx.fillRect(o.x,o.y,o.w,o.h)}
+  const cx=p.x+p.w/2,cy=p.y-p.h+8; let c=Math.sin(p.anim); if(p.mode==='jump'||p.mode==='fall')c=0;
+  let legA=c*(p.mode==='run'?1:.55),legB=-legA,armA=-c*(p.mode==='run'?.8:.45),armB=-armA;
+  if(p.mode==='jump'){legA=.35;legB=-.2;armA=-.8;armB=.8;} if(p.mode==='fall'){legA=-.2;legB=.25;armA=.6;armB=-.6;}
+  ctx.strokeStyle='#111';ctx.lineWidth=5;ctx.lineCap='round';ctx.beginPath();ctx.arc(cx,cy,11,0,Math.PI*2);ctx.stroke();
+  line(cx,cy+12,cx,cy+45); limb(cx,cy+18,20,armA,false); limb(cx,cy+18,20,armB,true); leg(cx,cy+45,22,legA,false); leg(cx,cy+45,22,legB,true);
+  ctx.fillStyle='rgba(0,0,0,.45)';ctx.fillRect(12,12,220,74);ctx.fillStyle='#fff';ctx.font='700 22px sans-serif';ctx.fillText('SCORE '+score,22,42);ctx.font='600 16px sans-serif';ctx.fillText('BEST '+Math.max(best,score),22,66);
+  if(gs===S.TITLE){center('VOICE JUMP RUNNER',46,-10);center('マイク有効化→START',22,30)} if(gs===S.OVER){center('GAME OVER',52,-8);center('RETRYで再開',22,34)}
+  function line(x1,y1,x2,y2){ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke()} function limb(x,y,len,a,m){let d=m?-1:1;line(x,y,x+Math.sin(a)*len*d,y+Math.cos(a)*len)} function leg(x,y,len,a,m){let d=m?-1:1,kx=x+Math.sin(a)*len*d,ky=y+Math.cos(a)*len;line(x,y,kx,ky);let a2=a*.7+.25;line(kx,ky,kx+Math.sin(a2)*(len-2)*d,ky+Math.cos(a2)*(len-2))}
+  function center(s,size,oy){ctx.font='900 '+size+'px sans-serif';ctx.textAlign='center';ctx.fillStyle='rgba(0,0,0,.7)';ctx.fillText(s,W/2,H/2+oy);ctx.textAlign='left';}
+}
+let last=performance.now(); (function loop(n){const dt=Math.min(.033,(n-last)/1000);last=n;upd(dt);draw();requestAnimationFrame(loop)})(last);
+ui.mic.onclick=async()=>{ui.warn.textContent='';try{await initMic(); if(actx.state==='suspended')await actx.resume(); ui.state.textContent='MIC READY';}catch(e){ui.warn.textContent='マイク有効化失敗: '+e.message+'（HTTPSまたはlocalhostで開いてください）';}};
+ui.start.onclick=()=>reset(); ui.retry.onclick=()=>{if(gs!==S.RUN)reset();};
+addEventListener('keydown',e=>{if(e.code==='Space'){if(gs===S.OVER)reset();else jump(false);} if(e.code==='ShiftLeft'||e.code==='ShiftRight')jump(true)});
+cv.addEventListener('pointerdown',()=>{if(gs===S.OVER)reset(); else jump(false)});
+})();
+</script>
+</body>
+</html>
